@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HireGenius - AI Recruitment Engine</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: #0f172a;
+            color: white;
+            margin: 0;
+            padding: 30px;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+        }
+
+        .card {
+            background: #1e293b;
+            padding: 20px;
+            border-radius: 16px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+        }
+
+        .candidate-card {
+            background: #111827;
+            padding: 15px;
+            border-radius: 12px;
+            margin-bottom: 15px;
+            transition: 0.3s ease;
+        }
+
+        .candidate-card:hover {
+            transform: scale(1.02);
+        }
+
+        .top3 {
+            border: 2px solid gold;
+            animation: glow 1.5s infinite alternate;
+        }
+
+        @keyframes glow {
+            from { box-shadow: 0 0 10px gold; }
+            to { box-shadow: 0 0 25px gold; }
+        }
+
+        .score {
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 12px;
+            color: white;
+        }
+
+        .hire { background: #16a34a; }
+        .consider { background: #f59e0b; }
+        .reject { background: #dc2626; }
+
+        button {
+            background: #2563eb;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #1e40af;
+        }
+
+        .full-width {
+            grid-column: span 2;
+        }
+
+        .upload-box {
+            margin-bottom: 40px;
+            text-align: center;
+            background: #1e293b;
+            padding: 20px;
+            border-radius: 16px;
+        }
+
+        input {
+            padding: 8px;
+            border-radius: 6px;
+            border: none;
+            margin: 8px;
+        }
+
+        pre {
+            white-space: pre-wrap;
+            background: #111827;
+            padding: 15px;
+            border-radius: 10px;
+        }
+
+        .error {
+            color: red;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>🚀 HireGenius AI Dashboard</h1>
+
+<div class="upload-box">
+    <form method="POST" enctype="multipart/form-data">
+        <input type="text" name="job_role" placeholder="Enter Job Role" required>
+        <input type="file" name="resumes" multiple required>
+        <br>
+        <button type="submit">Run AI Evaluation</button>
+    </form>
+</div>
+
+{% if result.error %}
+<p class="error">{{ result.error }}</p>
+{% endif %}
+
+{% if result.candidates %}
+
+<div class="dashboard">
+
+    <!-- Ranked -->
+    <div class="card full-width">
+        <h2>🏆 Ranked Candidates</h2>
+
+        {% for candidate in result.candidates %}
+        <div class="candidate-card {% if loop.index <= 3 %}top3{% endif %}">
+            <h3>{{ loop.index }}. {{ candidate.name }}</h3>
+            <div class="score">Final Score: {{ candidate.final_score }}</div>
+            <p>LLM Score: {{ candidate.llm_score }}</p>
+            <p>Semantic Match: {{ candidate.embedding_similarity }}%</p>
+
+            <span class="badge 
+                {% if candidate.decision == 'HIRE' %}
+                    hire
+                {% elif candidate.decision == 'CONSIDER' %}
+                    consider
+                {% else %}
+                    reject
+                {% endif %}
+            ">
+                {{ candidate.decision }}
+            </span>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Chart -->
+    <div class="card">
+        <h2>📊 Score Distribution</h2>
+        <canvas id="scoreChart"></canvas>
+    </div>
+
+    <!-- System Info -->
+    <div class="card">
+        <h2>⚡ System Performance</h2>
+        <p>Total Candidates: {{ result.candidates|length }}</p>
+        <p>Execution Time: {{ result.execution_time }} seconds</p>
+        <a href="/download_report">
+            <button>📄 Download Ranked Report</button>
+        </a>
+    </div>
+
+    <!-- Interview Questions -->
+    <div class="card full-width">
+        <h2>🧠 AI Interview Questions</h2>
+        <pre>{{ result.questions }}</pre>
+    </div>
+
+</div>
+
+<!-- 🔥 SAFE JSON STORAGE -->
+<script id="candidates-data" type="application/json">
+    {{ result.candidates | tojson }}
+</script>
+
+<script>
+    const rawData = document.getElementById("candidates-data");
+
+    if (rawData) {
+        const candidates = JSON.parse(rawData.textContent);
+
+        if (Array.isArray(candidates) && candidates.length > 0) {
+
+            const labels = candidates.map(c => c.name);
+            const scores = candidates.map(c => c.final_score);
+
+            const ctx = document.getElementById("scoreChart");
+
+            if (ctx) {
+                new Chart(ctx, {
+                    type: "bar",
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: "Final Score",
+                            data: scores,
+                            backgroundColor: "#2563eb"
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 100,
+                                ticks: { color: "white" }
+                            },
+                            x: {
+                                ticks: { color: "white" }
+                            }
+                        },
+                        plugins: {
+                            legend: {
+                                labels: { color: "white" }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    }
+</script>
+
+{% endif %}
+
+</body>
+</html>
