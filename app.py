@@ -6,55 +6,55 @@ import io
 import logging
 from dotenv import load_dotenv
 
-# ================== LOAD ENV VARIABLES ==================
-load_dotenv()
+# ================== LOAD ENV ==================
 
+load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# ================== BASIC SETUP ==================
-logging.basicConfig(level=logging.INFO)
+# ================== IMPORT LLM ==================
 
+from langchain_groq import ChatGroq
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+
+# ================== PDF REPORT ==================
+
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import letter
+
+# ================== INIT ==================
+
+logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 latest_rankings = []
 
-# ================== LAZY LOAD VARIABLES ==================
+# ================== LLM ==================
+
 llm = None
-embedding_model = None
+if GROQ_API_KEY:
+    llm = ChatGroq(
+        groq_api_key=GROQ_API_KEY,
+        model_name="llama-3.1-8b-instant",
+        temperature=0.2,
+        max_tokens=600
+    )
 
-# ================== SAFE LLM LOADER ==================
-def get_llm():
-    global llm
-    if llm is None and GROQ_API_KEY:
-        from langchain_groq import ChatGroq
-        llm = ChatGroq(
-            groq_api_key=GROQ_API_KEY,
-            model_name="llama-3.1-8b-instant",
-            temperature=0.2,
-            max_tokens=600
-        )
-    return llm
+json_parser = JsonOutputParser()
 
-# ================== SAFE EMBEDDING LOADER ==================
-def get_embedding_model():
-    global embedding_model
-    if embedding_model is None:
-        from langchain_community.embeddings import HuggingFaceEmbeddings
-        embedding_model = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-    return embedding_model
+# ================== SAFE LLM ==================
 
-# ================== SAFE LLM INVOKE ==================
 def safe_llm_invoke(chain, inputs, fallback=None):
+    if not chain:
+        return fallback
     try:
-        if not chain:
-            return fallback
         return chain.invoke(inputs)
     except Exception as e:
         logging.error(f"LLM ERROR: {e}")
         return fallback
 
-# ================== PDF EXTRACTION ==================
+# ================== PDF TEXT ==================
+
 def extract_text_from_pdf(file):
     try:
         reader = PdfReader(file)
@@ -62,17 +62,44 @@ def extract_text_from_pdf(file):
         for page in reader.pages:
             text += page.extract_text() or ""
         return text.strip()
-    except Exception as e:
-        logging.error(f"PDF ERROR: {e}")
+    except:
         return ""
 
+# ================== EVALUATION PROMPT ==================
+
+evaluation_prompt = PromptTemplate(
+    template="""
+You are an AI recruitment evaluator.
+
+Job Role:
+{job_role}
+
+Resume:
+{resume_text}
+
+Return ONLY valid JSON:
+{{
+  "score": 0,
+  "decision": ""
+}}
+""",
+    input_variables=["resume_text", "job_role"]
+)
+
+evaluation_chain = (
+    evaluation_prompt | llm | json_parser
+    if llm else None
+)
+
 # ================== MAIN ROUTE ==================
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     global latest_rankings
     result = {}
 
     if request.method == "POST":
+
         start_time = time.time()
         job_role = request.form.get("job_role")
         files = request.files.getlist("resumes")
@@ -83,53 +110,34 @@ def index():
         if not files:
             return render_template("index.html", result={"error": "Upload resumes."})
 
-        resume_data = []
+        evaluated_candidates = []
 
-        for file in files[:50]:
+        for file in files[:20]:
+
             text = extract_text_from_pdf(file)
             if not text:
                 continue
 
-            resume_data.append({
-                "name": "Candidate",
-                "text": text
-            })
-
-        if not resume_data:
-            return render_template("index.html", result={"error": "No readable resume content found."})
-
-        # ================== VECTOR SEARCH ==================
-        try:
-            from langchain_community.vectorstores import Chroma
-
-            texts = [r["text"] for r in resume_data]
-            metadatas = [{"name": r["name"]} for r in resume_data]
-
-            vectorstore = Chroma.from_texts(
-                texts=texts,
-                embedding=get_embedding_model(),
-                metadatas=metadatas
+            evaluation = safe_llm_invoke(
+                evaluation_chain,
+                {
+                    "resume_text": text,
+                    "job_role": job_role
+                },
+                fallback={"score": 0, "decision": "ERROR"}
             )
 
-            results = vectorstore.similarity_search_with_score(
-                job_role,
-                k=len(resume_data)
-            )
-
-        except Exception as e:
-            logging.error(f"Vector DB ERROR: {e}")
-            return render_template("index.html", result={"error": "Embedding system failed."})
-
-        evaluated_candidates = []
-
-        for doc, score in results:
-            candidate_name = doc.metadata["name"]
-            similarity = max(0, round((1 - score) * 100, 2))
+            if isinstance(evaluation, dict):
+                score = evaluation.get("score", 0)
+                decision = evaluation.get("decision", "UNKNOWN")
+            else:
+                score = 0
+                decision = "UNKNOWN"
 
             evaluated_candidates.append({
-                "name": candidate_name,
-                "final_score": similarity,
-                "decision": "Evaluated"
+                "name": file.filename,
+                "final_score": score,
+                "decision": decision
             })
 
         evaluated_candidates.sort(
@@ -148,15 +156,12 @@ def index():
 
     return render_template("index.html", result=result)
 
-# ================== DOWNLOAD REPORT ==================
+# ================== DOWNLOAD ==================
+
 @app.route("/download_report")
 def download_report():
     if not latest_rankings:
         return "No rankings available yet."
-
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.lib.pagesizes import letter
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
@@ -181,7 +186,7 @@ def download_report():
         mimetype="application/pdf"
     )
 
-# ================== RENDER SAFE RUN ==================
+# ================== RUN ==================
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run()

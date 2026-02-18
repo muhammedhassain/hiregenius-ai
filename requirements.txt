@@ -8,6 +8,3 @@ langchain
 langchain-core
 langchain-community
 langchain-groq
-
-chromadb
-sentence-transformers
