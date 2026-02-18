@@ -3,8 +3,11 @@ gunicorn
 python-dotenv
 PyPDF2
 reportlab
+
 langchain
-langchain-groq
+langchain-core
 langchain-community
+langchain-groq
+
 chromadb
 sentence-transformers
