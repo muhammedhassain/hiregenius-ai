@@ -4,19 +4,17 @@ import os
 import time
 import io
 import logging
-from pathlib import Path
 from dotenv import load_dotenv
 
-# ================== LOAD ENV FILE SAFELY ==================
+# ================== LOAD ENV VARIABLES ==================
 
-env_path = Path(__file__).parent / ".env"
-load_dotenv(dotenv_path=env_path)
+# Loads .env locally (ignored safely in Render)
+load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-print("Loaded API:", GROQ_API_KEY)
 
 if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY missing in .env file")
+    print("WARNING: GROQ_API_KEY not found. Running without LLM.")
 
 # ================== IMPORT LLM & VECTOR DB ==================
 
@@ -39,20 +37,25 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 latest_rankings = []
 
-# ================== LLM SETUP ==================
+# ================== LLM SETUP (SAFE) ==================
 
-llm = ChatGroq(
-    groq_api_key=GROQ_API_KEY,
-    model_name="llama-3.1-8b-instant",
-    temperature=0.2,
-    max_tokens=600
-)
+llm = None
+
+if GROQ_API_KEY:
+    llm = ChatGroq(
+        groq_api_key=GROQ_API_KEY,
+        model_name="llama-3.1-8b-instant",
+        temperature=0.2,
+        max_tokens=600
+    )
 
 json_parser = JsonOutputParser()
 
 # ================== SAFE LLM CALL ==================
 
 def safe_llm_invoke(chain, inputs, fallback=None):
+    if not chain:
+        return fallback
     try:
         return chain.invoke(inputs)
     except Exception as e:
@@ -91,7 +94,7 @@ Resume:
     input_variables=["resume_text"]
 )
 
-name_chain = name_prompt | llm
+name_chain = name_prompt | llm if llm else None
 
 def clean_name(raw_name):
     if not raw_name:
@@ -120,7 +123,10 @@ Return ONLY valid JSON:
     input_variables=["resume_text", "job_role"]
 )
 
-evaluation_chain = evaluation_prompt | llm | json_parser
+evaluation_chain = (
+    evaluation_prompt | llm | json_parser
+    if llm else None
+)
 
 # ================== INTERVIEW ==================
 
@@ -135,7 +141,7 @@ For role: {job_role}
     input_variables=["job_role"]
 )
 
-interview_chain = interview_prompt | llm
+interview_chain = interview_prompt | llm if llm else None
 
 # ================== MAIN ROUTE ==================
 
@@ -215,7 +221,7 @@ def index():
                 fallback={"score": 0, "decision": "ERROR"}
             )
 
-            llm_score = evaluation.get("score", 0)
+            llm_score = evaluation.get("score", 0) if isinstance(evaluation, dict) else 0
             final_score = round(llm_score * 0.6 + similarity * 0.4, 2)
 
             evaluated_candidates.append({
@@ -223,7 +229,7 @@ def index():
                 "llm_score": llm_score,
                 "embedding_similarity": similarity,
                 "final_score": final_score,
-                "decision": evaluation.get("decision", "UNKNOWN")
+                "decision": evaluation.get("decision", "UNKNOWN") if isinstance(evaluation, dict) else "UNKNOWN"
             })
 
         evaluated_candidates.sort(
@@ -236,7 +242,7 @@ def index():
         questions = safe_llm_invoke(
             interview_chain,
             {"job_role": job_role},
-            fallback="Interview generation failed."
+            fallback="Interview generation unavailable."
         )
 
         questions_text = questions.content if hasattr(questions, "content") else str(questions)
@@ -281,10 +287,8 @@ def download_report():
         mimetype="application/pdf"
     )
 
-# ================== RUN ==================
+# ================== RUN (RENDER SAFE) ==================
 
-# if __name__ == "__main__":
-#     app.run(debug=True)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
