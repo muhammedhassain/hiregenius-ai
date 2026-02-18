@@ -37,7 +37,7 @@ if GROQ_API_KEY:
         groq_api_key=GROQ_API_KEY,
         model_name="llama-3.1-8b-instant",
         temperature=0.2,
-        max_tokens=500
+        max_tokens=400
     )
 
 json_parser = JsonOutputParser()
@@ -66,48 +66,13 @@ def extract_text_from_pdf(file):
         logging.error(f"PDF ERROR: {e}")
         return ""
 
-# ================== NAME EXTRACTION PROMPT ==================
-
-name_prompt = PromptTemplate(
-    template="""
-You are an expert resume parser.
-
-Extract ONLY the candidate's full name from the resume.
-
-Rules:
-- Return only the full name
-- No explanation
-- No extra text
-- If unclear return "Unknown"
-
-Resume:
-{resume_text}
-""",
-    input_variables=["resume_text"]
-)
-
-name_chain = name_prompt | llm if llm else None
-
-def clean_name(raw_name):
-    if not raw_name:
-        return "Unknown"
-
-    name = str(raw_name).strip()
-    name = name.replace("\n", " ")
-    name = name.replace("Name:", "")
-    name = name.replace("Full Name:", "")
-    name = name.strip()
-
-    if len(name.split()) > 5:
-        return "Unknown"
-
-    return name if name else "Unknown"
-
 # ================== EVALUATION PROMPT ==================
 
 evaluation_prompt = PromptTemplate(
     template="""
 You are an AI recruitment evaluator.
+
+Evaluate the resume strictly for the given role.
 
 Job Role:
 {job_role}
@@ -117,7 +82,7 @@ Resume:
 
 Return ONLY valid JSON:
 {{
-  "score": number (0-100),
+  "score": number between 0-100,
   "decision": "HIRE" or "CONSIDER" or "REJECT"
 }}
 """,
@@ -150,30 +115,19 @@ def index():
 
         evaluated_candidates = []
 
-        for file in files[:10]:  # Limit for memory safety
+        for file in files[:5]:   # 🔥 limit to avoid rate limits
 
             text = extract_text_from_pdf(file)
 
             if not text:
                 continue
 
-            # Limit resume size (prevents memory crash)
-            text = text[:4000]
+            # 🔥 reduce memory + token usage
+            text = text[:3500]
 
-            # ---------- NAME EXTRACTION ----------
-            name_response = safe_llm_invoke(
-                name_chain,
-                {"resume_text": text},
-                fallback="Unknown"
-            )
+            # 🔥 Use filename as fallback name (no LLM call)
+            candidate_name = file.filename.replace(".pdf", "")
 
-            raw_name = name_response.content if hasattr(name_response, "content") else name_response
-            name = clean_name(raw_name)
-
-            if name == "Unknown":
-                name = file.filename.replace(".pdf", "")
-
-            # ---------- EVALUATION ----------
             evaluation = safe_llm_invoke(
                 evaluation_chain,
                 {
@@ -185,16 +139,19 @@ def index():
 
             if isinstance(evaluation, dict):
                 score = evaluation.get("score", 0)
-                decision = evaluation.get("decision", "UNKNOWN")
+                decision = evaluation.get("decision", "ERROR")
             else:
                 score = 0
-                decision = "UNKNOWN"
+                decision = "ERROR"
 
             evaluated_candidates.append({
-                "name": name,
+                "name": candidate_name,
                 "final_score": score,
                 "decision": decision
             })
+
+            # 🔥 Prevent burst API calls
+            time.sleep(1)
 
         evaluated_candidates.sort(
             key=lambda x: x["final_score"],
