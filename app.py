@@ -8,9 +8,7 @@ from dotenv import load_dotenv
 
 # ================== LOAD ENV VARIABLES ==================
 
-# Loads .env locally (ignored safely in Render)
 load_dotenv()
-
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not GROQ_API_KEY:
@@ -37,10 +35,9 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 latest_rankings = []
 
-# ================== LLM SETUP (SAFE) ==================
+# ================== LLM SETUP ==================
 
 llm = None
-
 if GROQ_API_KEY:
     llm = ChatGroq(
         groq_api_key=GROQ_API_KEY,
@@ -61,12 +58,6 @@ def safe_llm_invoke(chain, inputs, fallback=None):
     except Exception as e:
         logging.error(f"LLM ERROR: {e}")
         return fallback
-
-# ================== EMBEDDINGS ==================
-
-embedding_model = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
 
 # ================== PDF EXTRACTION ==================
 
@@ -189,7 +180,12 @@ def index():
         texts = [r["text"] for r in resume_data]
         metadatas = [{"name": r["name"]} for r in resume_data]
 
+        # ✅ LAZY LOAD EMBEDDING MODEL (IMPORTANT FIX)
         try:
+            embedding_model = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+
             vectorstore = Chroma.from_texts(
                 texts=texts,
                 embedding=embedding_model,
@@ -246,7 +242,6 @@ def index():
         )
 
         questions_text = questions.content if hasattr(questions, "content") else str(questions)
-
         execution_time = round(time.time() - start_time, 2)
 
         result = {
@@ -287,8 +282,8 @@ def download_report():
         mimetype="application/pdf"
     )
 
-# ================== RUN (RENDER SAFE) ==================
+# ================== RENDER SAFE START ==================
 
-# if __name__ == "__main__":
-#     port = int(os.environ.get("PORT", 10000))
-#     app.run(host="0.0.0.0", port=port)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
