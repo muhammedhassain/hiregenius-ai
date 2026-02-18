@@ -112,6 +112,7 @@
         .error {
             color: red;
             text-align: center;
+            font-weight: bold;
         }
     </style>
 </head>
@@ -129,11 +130,11 @@
     </form>
 </div>
 
-{% if result.error %}
+{% if result and result.error %}
 <p class="error">{{ result.error }}</p>
 {% endif %}
 
-{% if result.candidates %}
+{% if result and result.candidates %}
 
 <div class="dashboard">
 
@@ -144,20 +145,33 @@
         {% for candidate in result.candidates %}
         <div class="candidate-card {% if loop.index <= 3 %}top3{% endif %}">
             <h3>{{ loop.index }}. {{ candidate.name }}</h3>
-            <div class="score">Final Score: {{ candidate.final_score }}</div>
-            <p>LLM Score: {{ candidate.llm_score }}</p>
-            <p>Semantic Match: {{ candidate.embedding_similarity }}%</p>
 
-            <span class="badge 
-                {% if candidate.decision == 'HIRE' %}
+            <div class="score">
+                Final Score: {{ candidate.final_score | default(0) }}
+            </div>
+
+            <p>
+                LLM Score:
+                {{ candidate.llm_score | default(0) }}
+            </p>
+
+            <p>
+                Semantic Match:
+                {{ candidate.embedding_similarity | default(0) }}%
+            </p>
+
+            {% set decision = candidate.decision | default("REJECT") %}
+
+            <span class="badge
+                {% if decision == 'HIRE' %}
                     hire
-                {% elif candidate.decision == 'CONSIDER' %}
+                {% elif decision == 'CONSIDER' %}
                     consider
                 {% else %}
                     reject
                 {% endif %}
             ">
-                {{ candidate.decision }}
+                {{ decision }}
             </span>
         </div>
         {% endfor %}
@@ -172,8 +186,8 @@
     <!-- System Info -->
     <div class="card">
         <h2>⚡ System Performance</h2>
-        <p>Total Candidates: {{ result.candidates|length }}</p>
-        <p>Execution Time: {{ result.execution_time }} seconds</p>
+        <p>Total Candidates: {{ result.candidates | length }}</p>
+        <p>Execution Time: {{ result.execution_time | default(0) }} seconds</p>
         <a href="/download_report">
             <button>📄 Download Ranked Report</button>
         </a>
@@ -182,26 +196,26 @@
     <!-- Interview Questions -->
     <div class="card full-width">
         <h2>🧠 AI Interview Questions</h2>
-        <pre>{{ result.questions }}</pre>
+        <pre>{{ result.questions | default("No questions generated.") }}</pre>
     </div>
 
 </div>
 
-<!-- 🔥 SAFE JSON STORAGE -->
+<!-- SAFE JSON -->
 <script id="candidates-data" type="application/json">
-    {{ result.candidates | tojson }}
+{{ result.candidates | tojson | safe }}
 </script>
 
 <script>
     const rawData = document.getElementById("candidates-data");
 
-    if (rawData) {
+    if (rawData && rawData.textContent.trim() !== "") {
         const candidates = JSON.parse(rawData.textContent);
 
         if (Array.isArray(candidates) && candidates.length > 0) {
 
             const labels = candidates.map(c => c.name);
-            const scores = candidates.map(c => c.final_score);
+            const scores = candidates.map(c => c.final_score || 0);
 
             const ctx = document.getElementById("scoreChart");
 

@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 latest_rankings = []
 
-# ================== LLM ==================
+# ================== LLM SETUP ==================
 
 llm = None
 if GROQ_API_KEY:
@@ -37,7 +37,7 @@ if GROQ_API_KEY:
         groq_api_key=GROQ_API_KEY,
         model_name="llama-3.1-8b-instant",
         temperature=0.2,
-        max_tokens=600
+        max_tokens=500
     )
 
 json_parser = JsonOutputParser()
@@ -62,8 +62,46 @@ def extract_text_from_pdf(file):
         for page in reader.pages:
             text += page.extract_text() or ""
         return text.strip()
-    except:
+    except Exception as e:
+        logging.error(f"PDF ERROR: {e}")
         return ""
+
+# ================== NAME EXTRACTION PROMPT ==================
+
+name_prompt = PromptTemplate(
+    template="""
+You are an expert resume parser.
+
+Extract ONLY the candidate's full name from the resume.
+
+Rules:
+- Return only the full name
+- No explanation
+- No extra text
+- If unclear return "Unknown"
+
+Resume:
+{resume_text}
+""",
+    input_variables=["resume_text"]
+)
+
+name_chain = name_prompt | llm if llm else None
+
+def clean_name(raw_name):
+    if not raw_name:
+        return "Unknown"
+
+    name = str(raw_name).strip()
+    name = name.replace("\n", " ")
+    name = name.replace("Name:", "")
+    name = name.replace("Full Name:", "")
+    name = name.strip()
+
+    if len(name.split()) > 5:
+        return "Unknown"
+
+    return name if name else "Unknown"
 
 # ================== EVALUATION PROMPT ==================
 
@@ -79,8 +117,8 @@ Resume:
 
 Return ONLY valid JSON:
 {{
-  "score": 0,
-  "decision": ""
+  "score": number (0-100),
+  "decision": "HIRE" or "CONSIDER" or "REJECT"
 }}
 """,
     input_variables=["resume_text", "job_role"]
@@ -112,12 +150,30 @@ def index():
 
         evaluated_candidates = []
 
-        for file in files[:20]:
+        for file in files[:10]:  # Limit for memory safety
 
             text = extract_text_from_pdf(file)
+
             if not text:
                 continue
 
+            # Limit resume size (prevents memory crash)
+            text = text[:4000]
+
+            # ---------- NAME EXTRACTION ----------
+            name_response = safe_llm_invoke(
+                name_chain,
+                {"resume_text": text},
+                fallback="Unknown"
+            )
+
+            raw_name = name_response.content if hasattr(name_response, "content") else name_response
+            name = clean_name(raw_name)
+
+            if name == "Unknown":
+                name = file.filename.replace(".pdf", "")
+
+            # ---------- EVALUATION ----------
             evaluation = safe_llm_invoke(
                 evaluation_chain,
                 {
@@ -135,7 +191,7 @@ def index():
                 decision = "UNKNOWN"
 
             evaluated_candidates.append({
-                "name": file.filename,
+                "name": name,
                 "final_score": score,
                 "decision": decision
             })
@@ -156,7 +212,7 @@ def index():
 
     return render_template("index.html", result=result)
 
-# ================== DOWNLOAD ==================
+# ================== DOWNLOAD REPORT ==================
 
 @app.route("/download_report")
 def download_report():
@@ -189,4 +245,5 @@ def download_report():
 # ================== RUN ==================
 
 if __name__ == "__main__":
-    app.run()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
